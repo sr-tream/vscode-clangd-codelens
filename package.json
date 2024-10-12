@@ -8,7 +8,7 @@
   },
   "publisher": "sr-team",
   "license": "MIT",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "repository": {
     "type": "git",
     "url": "https://github.com/sr-tream/vscode-clangd-codelens.git"
@@ -38,6 +38,26 @@
       {
         "command": "clangd.action.showReferences",
         "title": "clangd: Show References"
+      }
+    ],
+    "configuration": [
+      {
+        "title": "clangd: Code Lens",
+        "properties": {
+          "clangd.CodeLens.RestartServerOnChange": {
+            "type": "boolean",
+            "default": false,
+            "markdownDescription": "Automatically restart `clangd` server, when code lens config changed",
+            "order": 0
+          },
+          "clangd.CodeLens.Enabled": {
+            "title": "clangd: Code Lens enabled",
+            "type": "boolean",
+            "default": true,
+            "order": 1,
+            "markdownDescription": "Enable code lens in `clangd`"
+          }
+        }
       }
     ]
   },
