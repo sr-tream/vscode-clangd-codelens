@@ -92,10 +92,9 @@ class ConfigWatcher implements vscode.Disposable {
 		if (!changedClangdArgs && !changedCodeLens) return;
 
 		let config = await Config.read();
-		if (changedCodeLens) {
+		if (changedCodeLens)
 			this.codelens = config.Enabled;
-			this.changed = true;
-		}
+		this.changed = true;
 	}
 
 	private static doRestartClangd() {
@@ -132,8 +131,10 @@ class ConfigWatcher implements vscode.Disposable {
 
 		await config.update('arguments', args, vscode.ConfigurationTarget.Workspace);
 		await ConfigWatcher.sleep(WAIT_TO_CHECK_WRITING);
-		if (!ConfigWatcher.isEqual(args, vscode.workspace.getConfiguration("clangd").get<string[]>('arguments', [])))
+		if (!ConfigWatcher.isEqual(args, vscode.workspace.getConfiguration("clangd").get<string[]>('arguments', []))) {
+			this.changed = true;
 			return this.write();
+		}
 		return true;
 	}
 
