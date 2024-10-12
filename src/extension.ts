@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import * as crypto from 'crypto';
 import * as lc from 'vscode-languageclient/node';
 
 import type { ClangdExtension } from '@clangd/vscode-clangd';
@@ -10,11 +11,16 @@ const CLANGD_COMMAND_RESTART = 'clangd.restart';
 const WAIT_TIME_TO_APPLY_MS = 1000;
 const CLANGD_API_VERSION = 1;
 
+let WAIT_TO_CHECK_WRITING = 10;
+
 export function activate(context: vscode.ExtensionContext) {
 	const clangdExtension = vscode.extensions.getExtension<ClangdExtension>(CLANGD_EXTENSION);
 	if (!clangdExtension) {
 		return undefined;
 	}
+
+	const hash = crypto.createHash('md5').update(context.extension.id).digest('hex');
+	WAIT_TO_CHECK_WRITING = (parseInt(hash, 16) % 1000) + 10;
 
 	const disposable = vscode.commands.registerCommand('clangd.action.showReferences',
 		async (argument: {
@@ -49,7 +55,7 @@ class ConfigWatcher implements vscode.Disposable {
 	private codelens: boolean = true;
 
 	constructor() {
-		this.onDocumentChanged = vscode.workspace.onDidChangeTextDocument((event) => this.didDocumentChange(event.document));
+		this.onDocumentChanged = vscode.window.onDidChangeActiveTextEditor((event) => this.didDocumentChange(event?.document));
 		this.onConfigurationChanged = vscode.workspace.onDidChangeConfiguration((e) => this.didConfigurationChange(e));
 
 		Config.read().then((config) => {
@@ -66,8 +72,9 @@ class ConfigWatcher implements vscode.Disposable {
 		this.onConfigurationChanged.dispose();
 	}
 
-	private async didDocumentChange(document: vscode.TextDocument) {
-		if (!['c', 'c++', 'cuda-cpp', 'objective-c', 'objective-cpp'].includes(document.languageId)) return;
+	private async didDocumentChange(document?: vscode.TextDocument) {
+		const lang = document?.languageId || '';
+		if (!['c', 'cpp', 'cuda-cpp', 'objective-c', 'objective-cpp'].includes(lang)) return;
 		const changed = await this.write();
 
 		if (!changed) return;
@@ -85,22 +92,6 @@ class ConfigWatcher implements vscode.Disposable {
 		let config = await Config.read();
 		if (changedCodeLens) {
 			this.codelens = config.Enabled;
-			console.log(`[CodeLens] Enabled: ${this.codelens}`);
-		}
-
-		const changed = await this.write();
-
-		if (changed) {
-			if (changedClangdArgs) {
-				const message = '[CodeLens] The `--code-lens` flag controlled by this extension.';
-				const actionToggle = (this.codelens ? 'Disable' : 'Enable') + ' code lens';
-				vscode.window.showInformationMessage(message, actionToggle).then((selection) => {
-					if (selection === actionToggle)
-						Config.toggle(!this.codelens);
-				});
-			}
-			if (config.RestartServerOnChange)
-				ConfigWatcher.doRestartClangd();
 		}
 	}
 
@@ -116,7 +107,6 @@ class ConfigWatcher implements vscode.Disposable {
 	private async write(): Promise<boolean> {
 		let config = vscode.workspace.getConfiguration("clangd");
 		const args = config.get<string[]>('arguments', []);
-		console.log(`[CodeLens] Load clangd arguments: ${args.toString()}`);
 
 		const arg = ConfigWatcher.flag + '=' + (this.codelens ? '1' : '0');
 		const argId = args.findIndex(arg => arg.trimStart().startsWith(ConfigWatcher.flag));
@@ -126,19 +116,33 @@ class ConfigWatcher implements vscode.Disposable {
 			else if (curValue.length === 0) curValue = '1';
 
 			const codelens = curValue === '1' || curValue === 'true';
-			console.log(`[CodeLens] Load current codelens state: ${codelens}`);
 
-			if (codelens === this.codelens) {
-				console.log(`[CodeLens] Current state is equals`);
+			if (codelens === this.codelens)
 				return false;
-			}
 
 			args[argId] = arg;
 		} else
 			args.push(arg);
 
 		await config.update('arguments', args, vscode.ConfigurationTarget.Workspace);
-		console.log(`[CodeLens] Save clangd arguments: ${args.toString()}`);
+		await ConfigWatcher.sleep(WAIT_TO_CHECK_WRITING);
+		if (!ConfigWatcher.isEqual(args, vscode.workspace.getConfiguration("clangd").get<string[]>('arguments', [])))
+			return this.write();
 		return true;
+	}
+
+	private static isEqual(lhs: string[], rhs: string[]): boolean {
+		if (lhs.length !== rhs.length)
+			return false;
+
+		for (const arg of lhs) {
+			if (rhs.indexOf(arg) === -1)
+				return false;
+		}
+		return true;
+	}
+
+	private static async sleep(ms: number): Promise<void> {
+		return new Promise(resolve => setTimeout(resolve, ms));
 	}
 };
