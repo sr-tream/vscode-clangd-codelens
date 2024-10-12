@@ -53,6 +53,7 @@ class ConfigWatcher implements vscode.Disposable {
 	private onDocumentChanged: vscode.Disposable;
 	private onConfigurationChanged: vscode.Disposable;
 	private codelens: boolean = true;
+	private changed: boolean = false;
 
 	constructor() {
 		this.onDocumentChanged = vscode.window.onDidChangeActiveTextEditor((event) => this.didDocumentChange(event?.document));
@@ -60,6 +61,7 @@ class ConfigWatcher implements vscode.Disposable {
 
 		Config.read().then((config) => {
 			this.codelens = config.Enabled;
+			this.changed = true;
 			this.write().then((changed) => {
 				if (!changed || !config.RestartServerOnChange) return;
 
@@ -92,6 +94,7 @@ class ConfigWatcher implements vscode.Disposable {
 		let config = await Config.read();
 		if (changedCodeLens) {
 			this.codelens = config.Enabled;
+			this.changed = true;
 		}
 	}
 
@@ -105,6 +108,9 @@ class ConfigWatcher implements vscode.Disposable {
 	}
 
 	private async write(): Promise<boolean> {
+		if (!this.changed) return false;
+		this.changed = false;
+
 		let config = vscode.workspace.getConfiguration("clangd");
 		const args = config.get<string[]>('arguments', []);
 
