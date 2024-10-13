@@ -1,6 +1,10 @@
 import * as vscode from 'vscode';
 import * as crypto from 'crypto';
 import * as lc from 'vscode-languageclient/node';
+import { homedir } from 'os';
+import * as path from 'path';
+import { exec } from 'child_process';
+import { promisify } from 'util';
 
 import type { ClangdExtension } from '@clangd/vscode-clangd';
 
@@ -52,6 +56,8 @@ class ConfigWatcher implements vscode.Disposable {
 
 	private onDocumentChanged: vscode.Disposable;
 	private onConfigurationChanged: vscode.Disposable;
+	private support: Map<string, boolean> = new Map();
+	private clangd: string = '';
 	private codelens: boolean = true;
 	private changed: boolean = false;
 
@@ -60,12 +66,20 @@ class ConfigWatcher implements vscode.Disposable {
 		this.onConfigurationChanged = vscode.workspace.onDidChangeConfiguration((e) => this.didConfigurationChange(e));
 
 		Config.read().then((config) => {
+			const clangd = vscode.workspace.getConfiguration('clangd');
+			this.clangd = clangd.get<string>('path', '');
+
 			this.codelens = config.Enabled;
 			this.changed = true;
-			this.write().then((changed) => {
-				if (!changed || !config.RestartServerOnChange) return;
+			ConfigWatcher.isFlagSupported(this.clangd).then((supported) => {
+				this.support.set(this.clangd, supported);
+				if (!supported) this.codelens = true; // Default value to remove flag
 
-				ConfigWatcher.doRestartClangd();
+				this.write().then((changed) => {
+					if (!changed || !config.RestartServerOnChange) return;
+
+					ConfigWatcher.doRestartClangd();
+				});
 			});
 		});
 	}
@@ -87,14 +101,27 @@ class ConfigWatcher implements vscode.Disposable {
 		ConfigWatcher.doRestartClangd();
 	}
 	private async didConfigurationChange(e: vscode.ConfigurationChangeEvent) {
+		const changedClangdPath = e.affectsConfiguration('clangd.path');
 		const changedClangdArgs = e.affectsConfiguration('clangd.arguments');
 		const changedCodeLens = e.affectsConfiguration('clangd.CodeLens.Enabled');
-		if (!changedClangdArgs && !changedCodeLens) return;
+		if (!changedClangdPath && !changedClangdArgs && !changedCodeLens) return;
+
+		if (changedClangdPath)
+			this.clangd = vscode.workspace.getConfiguration('clangd').get<string>('path', '');
 
 		let config = await Config.read();
 		if (changedCodeLens)
 			this.codelens = config.Enabled;
 		this.changed = true;
+
+		if (this.support.has(this.clangd)) {
+			if (!this.support.get(this.clangd))
+				this.codelens = true; // Default value to remove flag
+		} else {
+			const supported = await ConfigWatcher.isFlagSupported(this.clangd);
+			this.support.set(this.clangd, supported);
+			if (!supported) this.codelens = true; // Default value to remove flag
+		}
 	}
 
 	private static doRestartClangd() {
@@ -112,6 +139,7 @@ class ConfigWatcher implements vscode.Disposable {
 
 		let config = vscode.workspace.getConfiguration("clangd");
 		const args = config.get<string[]>('arguments', []);
+		console.log(`clangd code lens args:\n${args.join('\n')}`)
 
 		const arg = ConfigWatcher.flag + '=' + (this.codelens ? '1' : '0');
 		const argId = args.findIndex(arg => arg.trimStart().startsWith(ConfigWatcher.flag));
@@ -122,12 +150,16 @@ class ConfigWatcher implements vscode.Disposable {
 
 			const codelens = curValue === '1' || curValue === 'true';
 
-			if (codelens === this.codelens)
+			if (codelens === this.codelens && !this.codelens)
 				return false;
 
-			args[argId] = arg;
-		} else
+			if (!this.codelens)
+				args[argId] = arg;
+			else
+				args.splice(argId, 1);
+		} else if (!this.codelens)
 			args.push(arg);
+		console.log(`clangd code lens updated args:\n${args.join('\n')}`)
 
 		await config.update('arguments', args, vscode.ConfigurationTarget.Workspace);
 		await ConfigWatcher.sleep(WAIT_TO_CHECK_WRITING);
@@ -152,4 +184,60 @@ class ConfigWatcher implements vscode.Disposable {
 	private static async sleep(ms: number): Promise<void> {
 		return new Promise(resolve => setTimeout(resolve, ms));
 	}
+
+	private static async isFlagSupported(clangd: string): Promise<boolean> {
+		if (clangd === '') clangd = 'clangd';
+		else clangd = substitute(clangd);
+
+		const execAsync = promisify(exec);
+		const { stdout, stderr } = await execAsync(`${clangd} --help-hidden`);
+		return stdout.includes(ConfigWatcher.flag);
+	}
 };
+
+/* -------------------------------------------------------------------------- */
+/*                        From vscode-clamgd extension                        */
+/* -------------------------------------------------------------------------- */
+
+// Traverse a JSON value, replacing placeholders in all strings.
+function substitute<T>(val: T): T {
+	if (typeof val === 'string') {
+		val = val.replace(/\$\{(.*?)\}/g, (match, name) => {
+			// If there's no replacement available, keep the placeholder.
+			return replacement(name) ?? match;
+		}) as unknown as T;
+	} else if (Array.isArray(val))
+		val = val.map((x) => substitute(x)) as unknown as T;
+	return val;
+}
+
+// Subset of substitution variables that are most likely to be useful.
+// https://code.visualstudio.com/docs/editor/variables-reference
+function replacement(name: string): string | undefined {
+	if (name === 'userHome') {
+		return homedir();
+	}
+	if (name === 'workspaceRoot' || name === 'workspaceFolder' ||
+		name === 'cwd') {
+		if (vscode.workspace.rootPath !== undefined)
+			return vscode.workspace.rootPath;
+		if (vscode.window.activeTextEditor !== undefined)
+			return path.dirname(vscode.window.activeTextEditor.document.uri.fsPath);
+		return process.cwd();
+	}
+	if (name === 'workspaceFolderBasename' &&
+		vscode.workspace.rootPath !== undefined) {
+		return path.basename(vscode.workspace.rootPath);
+	}
+	const envPrefix = 'env:';
+	if (name.startsWith(envPrefix))
+		return process.env[name.substr(envPrefix.length)] ?? '';
+	const configPrefix = 'config:';
+	if (name.startsWith(configPrefix)) {
+		const config = vscode.workspace.getConfiguration().get(
+			name.substr(configPrefix.length));
+		return (typeof config === 'string') ? config : undefined;
+	}
+
+	return undefined;
+}
