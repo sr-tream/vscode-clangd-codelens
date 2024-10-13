@@ -139,7 +139,6 @@ class ConfigWatcher implements vscode.Disposable {
 
 		let config = vscode.workspace.getConfiguration("clangd");
 		const args = config.get<string[]>('arguments', []);
-		console.log(`clangd code lens args:\n${args.join('\n')}`)
 
 		const arg = ConfigWatcher.flag + '=' + (this.codelens ? '1' : '0');
 		const argId = args.findIndex(arg => arg.trimStart().startsWith(ConfigWatcher.flag));
@@ -159,7 +158,6 @@ class ConfigWatcher implements vscode.Disposable {
 				args.splice(argId, 1);
 		} else if (!this.codelens)
 			args.push(arg);
-		console.log(`clangd code lens updated args:\n${args.join('\n')}`)
 
 		await config.update('arguments', args, vscode.ConfigurationTarget.Workspace);
 		await ConfigWatcher.sleep(WAIT_TO_CHECK_WRITING);
