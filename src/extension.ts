@@ -36,7 +36,6 @@ export function activate(context: vscode.ExtensionContext) {
 			const api = clangdExtension.exports.getApi(CLANGD_API_VERSION);
 			const client = api.languageClient;
 			if (client) {
-				// <<<<---- The main changes are here ---->>>>
 				let sourceUri: vscode.Uri;
 				if (argument.uri.startsWith('file:///')) {
 					sourceUri = vscode.Uri.parse(argument.uri);
