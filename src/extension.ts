@@ -36,9 +36,16 @@ export function activate(context: vscode.ExtensionContext) {
 			const api = clangdExtension.exports.getApi(CLANGD_API_VERSION);
 			const client = api.languageClient;
 			if (client) {
+				let sourceUri: vscode.Uri;
+				if (argument.uri.startsWith('file:///')) {
+					sourceUri = vscode.Uri.parse(argument.uri);
+				} else {
+					// Assume argument.uri is an absolute system path
+					sourceUri = vscode.Uri.file(argument.uri);
+				}
 				await vscode.commands.executeCommand(
 					'editor.action.showReferences',
-					vscode.Uri.parse(argument.uri),
+					sourceUri, // Using the Transformed URI
 					client.protocol2CodeConverter.asPosition(argument.position),
 					argument.locations.map(client.protocol2CodeConverter.asLocation),
 				);
