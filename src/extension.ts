@@ -17,6 +17,41 @@ const CLANGD_API_VERSION = 1;
 
 let WAIT_TO_CHECK_WRITING = 10;
 
+function isDefined<T>(value: T | undefined): value is T {
+	return value !== undefined;
+}
+
+function parseSourceUri(argumentUri: string): vscode.Uri {
+	if (argumentUri.startsWith('file:///')) {
+		return vscode.Uri.parse(argumentUri);
+	}
+
+	// Assume argument.uri is an absolute system path
+	return vscode.Uri.file(argumentUri);
+}
+
+function getReferenceLocationKey(location: vscode.Location): string {
+	const { start, end } = location.range;
+	return `${location.uri.toString()}#${start.line}:${start.character}-${end.line}:${end.character}`;
+}
+
+export function dedupeReferenceLocations(locations: vscode.Location[]): vscode.Location[] {
+	const uniqueLocations: vscode.Location[] = [];
+	const seenLocationKeys = new Set<string>();
+
+	for (const location of locations) {
+		const locationKey = getReferenceLocationKey(location);
+		if (seenLocationKeys.has(locationKey)) {
+			continue;
+		}
+
+		seenLocationKeys.add(locationKey);
+		uniqueLocations.push(location);
+	}
+
+	return uniqueLocations;
+}
+
 export function activate(context: vscode.ExtensionContext) {
 	const clangdExtension = vscode.extensions.getExtension<ClangdExtension>(CLANGD_EXTENSION);
 	if (!clangdExtension) {
@@ -36,18 +71,17 @@ export function activate(context: vscode.ExtensionContext) {
 			const api = clangdExtension.exports.getApi(CLANGD_API_VERSION);
 			const client = api.languageClient;
 			if (client) {
-				let sourceUri: vscode.Uri;
-				if (argument.uri.startsWith('file:///')) {
-					sourceUri = vscode.Uri.parse(argument.uri);
-				} else {
-					// Assume argument.uri is an absolute system path
-					sourceUri = vscode.Uri.file(argument.uri);
-				}
+				const sourceUri = parseSourceUri(argument.uri);
+				const referenceLocations = dedupeReferenceLocations(
+					argument.locations
+						.map(client.protocol2CodeConverter.asLocation)
+						.filter(isDefined)
+				);
 				await vscode.commands.executeCommand(
 					'editor.action.showReferences',
 					sourceUri, // Using the Transformed URI
 					client.protocol2CodeConverter.asPosition(argument.position),
-					argument.locations.map(client.protocol2CodeConverter.asLocation),
+					referenceLocations,
 				);
 			}
 		});
